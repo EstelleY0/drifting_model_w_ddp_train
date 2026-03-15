@@ -1,5 +1,6 @@
 import argparse
 import os
+from argparse import Namespace
 from pathlib import Path
 
 import matplotlib
@@ -37,7 +38,7 @@ def main_worker(rank, world_size, config, gpu_ids):
     device = torch.device(f"cuda:{gpu_id}")
 
     # Determine if the dataset is 2D toy data
-    is_toy = config['dataset'] in ["swiss_roll", "moons", "circles", "checkerboard"]
+    is_toy = config.dataset in ["swiss_roll", "moons", "circles", "checkerboard"]
 
     # Model Initialization
     # For toy data, img_size is irrelevant but kept for structure consistency
@@ -45,14 +46,14 @@ def main_worker(rank, world_size, config, gpu_ids):
         img_size=32 if not is_toy else 1,
         in_channels=3 if not is_toy else 2,
         patch_size=4 if not is_toy else 1,
-        dim=config['dim'],
-        depth=config['depth'],
-        num_heads=config['num_heads']
+        dim=config.dim,
+        depth=config.depth,
+        num_heads=config.num_heads
     ).to(device)
 
     # Feature extractor setup
     # Uses pixel space (flatten) for toy data by passing None or specific flag
-    phi = None if is_toy else create_feature_encoder(dataset=config['dataset']).to(device)
+    phi = None if is_toy else create_feature_encoder(dataset=config.dataset).to(device)
     if phi is not None:
         phi.eval()
 
@@ -60,27 +61,27 @@ def main_worker(rank, world_size, config, gpu_ids):
 
     # Loss, Optimizer, and EMA
     criterion = ClassConditionalDriftingLoss(phi=phi, use_pixel_space=is_toy).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config['lr'])
-    ema = EMA(model.module, decay=config['ema_decay'])
-    warmup_steps = config['warmup_steps']
-    base_lr = config['lr']
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
+    ema = EMA(model.module, decay=config.ema_decay)
+    warmup_steps = config.warmup_steps
+    base_lr = config.lr
 
     # Data Loader setup
     if is_toy:
-        loader = get_toy_loader(name=config['dataset'], batch_size=config['batch_size'])
-    elif config['dataset'] == "cifar10":
-        loader = get_cifar10_loader(n_classes_per_batch=config['n_classes_per_batch'],
-                                    n_samples_per_class=config['n_samples_per_class'])
-    elif config['dataset'] == "mnist":
-        loader = get_mnist_loader(n_classes_per_batch=config['n_classes_per_batch'],
-                                  n_samples_per_class=config['n_samples_per_class'])
+        loader = get_toy_loader(name=config.dataset, batch_size=config.batch_size)
+    elif config.dataset == "cifar10":
+        loader = get_cifar10_loader(n_classes_per_batch=config.n_classes_per_batch,
+                                    n_samples_per_class=config.n_samples_per_class)
+    elif config.dataset == "mnist":
+        loader = get_mnist_loader(n_classes_per_batch=config.n_classes_per_batch,
+                                  n_samples_per_class=config.n_samples_per_class)
     else:
-        raise ValueError(f"Unsupported dataset: {config['dataset']}")
+        raise ValueError(f"Unsupported dataset: {config.dataset}")
 
-    writer = SummaryWriter(Path(config['log_dir']) / "logs") if rank == 0 else None
+    writer = SummaryWriter(Path(config.log_dir) / "logs") if rank == 0 else None
     global_step = 0
 
-    for epoch in range(config['epochs']):
+    for epoch in range(config.epochs):
         if hasattr(loader.sampler, 'set_epoch'):
             loader.sampler.set_epoch(epoch)
 
@@ -99,7 +100,7 @@ def main_worker(rank, world_size, config, gpu_ids):
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = curr_lr
 
-            eps = torch.randn(images.size(0), config['latent_dim'], device=device)
+            eps = torch.randn(images.size(0), config.latent_dim, device=device)
             alpha = torch.ones(images.size(0), device=device)
             x_gen = model(eps, labels, alpha)
 
@@ -121,17 +122,17 @@ def main_worker(rank, world_size, config, gpu_ids):
                     writer.add_scalar('Loss/train', loss.item(), global_step)
 
         # Checkpointing and Visualization
-        if rank == 0 and (epoch + 1) % config['save_freq'] == 0:
-            ckpt_path = Path(config['log_dir']) / "models" / f"epoch_{epoch + 1}.pt"
+        if rank == 0 and (epoch + 1) % config.save_freq == 0:
+            ckpt_path = Path(config.log_dir) / "models" / f"epoch_{epoch + 1}.pt"
             CheckpointManager.save(ckpt_path, model.module, ema, optimizer, epoch + 1, global_step)
 
             with torch.no_grad():
                 ema.shadow.eval()
-                res_path = Path(config['log_dir']) / "results" / f"epoch_{epoch + 1}.png"
+                res_path = Path(config.log_dir) / "results" / f"epoch_{epoch + 1}.png"
 
                 if is_toy:
                     # Visualization for 2D Toy data: Scatter Plot
-                    test_eps = torch.randn(5000, config['latent_dim'], device=device)
+                    test_eps = torch.randn(5000, config.latent_dim, device=device)
                     test_labels = torch.zeros(5000, dtype=torch.long, device=device)
                     samples = ema.shadow(test_eps, test_labels, torch.ones(5000, device=device))
                     samples = samples.cpu().numpy()
@@ -186,24 +187,25 @@ def load_config_and_args():
     for key, value in vars(args).items():
         if value is not None:
             config[key] = value
-    return config
 
+    conf = Namespace(**config)
+    return conf
 
 def main():
     config = load_config_and_args()
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
-    gpu_ids = [int(i) for i in config['gpu_idx'].split(",")]
+    gpu_ids = [int(i) for i in config.gpu_idx.split(",")]
     world_size = len(gpu_ids)
 
     # Directory preparation
-    log_path = Path(config['log_dir'])
+    log_path = Path(config.log_dir)
     log_path.mkdir(parents=True, exist_ok=True)
     (log_path / "models").mkdir(parents=True, exist_ok=True)
     (log_path / "results").mkdir(parents=True, exist_ok=True)
     (log_path / "logs").mkdir(parents=True, exist_ok=True)
 
-    print(f"Starting Training: {config['exp_name']} on {world_size} GPUs")
+    print(f"Starting Training: {config.exp_name} on {world_size} GPUs")
     mp.spawn(main_worker, args=(world_size, config, gpu_ids), nprocs=world_size, join=True)
 
 
