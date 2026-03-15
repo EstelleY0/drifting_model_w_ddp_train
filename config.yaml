@@ -1,0 +1,29 @@
+# Project Settings
+exp_name: "drifting_cifar10_v1"
+seed: 42
+
+# Data Settings
+dataset: "cifar10" # mnist, cifar10, swiss_roll
+batch_size: 256 # Used if class_balanced is False
+class_balanced: True
+n_classes_per_batch: 10
+n_samples_per_class: 64
+
+# Model Settings
+dim: 256
+depth: 6
+num_heads: 4
+patch_size: 4
+in_context_tokens: 16
+latent_dim: 16
+
+# Training Settings
+epochs: 20000
+lr: 0.0001
+warmup_steps: 5000
+ema_decay: 0.999
+gpu_idx: "0"
+
+# Save Settings
+save_freq: 1
+log_dir: "./outputs"
