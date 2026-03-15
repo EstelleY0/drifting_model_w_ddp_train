@@ -31,6 +31,17 @@ The model learns by calculating a **Drifting Field** between real samples and ge
 
 ---
 
+## Environment & Requirements
+This implementation has been tested and verified on the following hardware and software:
+
+* **OS:** Ubuntu 22.04 LTS
+* **GPU:** NVIDIA GeForce RTX 5060 Ti
+* **CUDA:** 12.8
+* **Python:** 3.10
+* **Core Dependencies:** PyTorch 2.9
+
+---
+
 ## 2. Training Guide
 
 ### Configuration
