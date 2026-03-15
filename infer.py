@@ -16,6 +16,7 @@ def run_inference():
     parser.add_argument("--num_samples", type=int, default=16, help="Number of images to generate")
     parser.add_argument("--alpha", type=float, default=1.0, help="Classifier-Free Guidance scale")
     parser.add_argument("--out_dir", type=str, default="./inference_results", help="Output directory")
+    parser.add_argument("--is_toy", action="store_true", help="Is using toy data")
     args = parser.parse_args()
 
     # Load config from original project
@@ -26,9 +27,10 @@ def run_inference():
     print(f"Using device: {device}")
 
     # Initialize Model based on config
-    is_toy = config['dataset'] in ["swiss_roll", "moons", "circles", "checkerboard"]
     model = DriftingModel(
-        img_size=32 if not is_toy else 1,
+        img_size=32 if not args.is_toy else 1,
+        in_channels=3 if not args.is_toy else 2,
+        patch_size=4 if not args.is_toy else 1,
         dim=config['dim'],
         depth=config['depth'],
         num_heads=config['num_heads']
@@ -46,9 +48,9 @@ def run_inference():
 
     with torch.no_grad():
         # Prepare noise and labels
-        if is_toy:
-            eps = torch.randn(1000, 1, 1, 2, device=device)
-            labels = torch.zeros(1000, dtype=torch.long, device=device)
+        if args.is_toy:
+            eps = torch.randn(args.num_samples, 16, device=device)
+            labels = torch.zeros(args.num_samples, dtype=torch.long, device=device)
         else:
             # 3 channels, 32x32 resolution for CIFAR/MNIST
             c = 1 if config['dataset'] == "mnist" else 3
@@ -60,7 +62,7 @@ def run_inference():
         samples = model.forward_with_cfg(eps, labels, alpha=args.alpha)
 
         # Save Results
-        if is_toy:
+        if args.is_toy:
             samples = samples.flatten(1).cpu().numpy()
             plt.figure(figsize=(6, 6))
             plt.scatter(samples[:, 0], samples[:, 1], alpha=0.5, s=2)
