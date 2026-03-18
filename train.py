@@ -81,94 +81,105 @@ def main_worker(rank, world_size, config, gpu_ids):
     writer = SummaryWriter(Path(config.log_dir) / "logs") if rank == 0 else None
     global_step = 0
 
-    for epoch in range(config.epochs):
-        if hasattr(loader.sampler, 'set_epoch'):
-            loader.sampler.set_epoch(epoch)
+    try:
+        for epoch in range(config.epochs):
+            if hasattr(loader.sampler, 'set_epoch'):
+                loader.sampler.set_epoch(epoch)
 
-        model.train()
-        pbar = tqdm(loader) if rank == 0 else loader
+            model.train()
+            pbar = tqdm(loader) if rank == 0 else loader
 
-        for images, labels in pbar:
-            images, labels = images.to(device), labels.to(device)
+            for images, labels in pbar:
+                images, labels = images.to(device), labels.to(device)
 
-            # Adapt 2D coordinates (B, 2) for the PatchEmbed layer (B, C, H, W)
-            if is_toy:
-                images = images.view(images.size(0), 1, 1, 2)
+                # Adapt 2D coordinates (B, 2) for the PatchEmbed layer (B, C, H, W)
+                if is_toy:
+                    images = images.view(images.size(0), 1, 1, 2)
 
-            if global_step < warmup_steps:
-                curr_lr = base_lr * (global_step / warmup_steps)
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = curr_lr
+                if global_step < warmup_steps:
+                    curr_lr = base_lr * (global_step / warmup_steps)
+                    for param_group in optimizer.param_groups:
+                        param_group['lr'] = curr_lr
 
-            B, C, H, W = images.shape
-            eps = torch.randn(B, C, H, W, device=device)
-            alpha = torch.ones(images.size(0), device=device)
-            x_gen = model(eps, labels, alpha)
+                B, C, H, W = images.shape
+                eps = torch.randn(B, C, H, W, device=device)
+                alpha = torch.ones(images.size(0), device=device)
+                x_gen = model(eps, labels, alpha)
 
-            # Loss calculation: handle flattened features for toy data
-            target_images = images.flatten(1) if is_toy else images
-            pred_images = x_gen.flatten(1) if is_toy else x_gen
-            loss, info = criterion(pred_images, labels, target_images, labels)
+                # Loss calculation: handle flattened features for toy data
+                target_images = images.flatten(1) if is_toy else images
+                pred_images = x_gen.flatten(1) if is_toy else x_gen
+                loss, info = criterion(pred_images, labels, target_images, labels)
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-            ema.update(model.module)
-            global_step += 1
+                ema.update(model.module)
+                global_step += 1
 
-            if rank == 0:
-                pbar.set_description(f"Epoch {epoch} | Loss: {info['loss']:.4f} | V_norm: {info['drift_norm']:.4f}")
-            if global_step % 10 == 0:
-                    writer.add_scalar('Loss/train', loss.item(), global_step)
+                if rank == 0:
+                    pbar.set_description(f"Epoch {epoch} | Loss: {info['loss']:.4f} | V_norm: {info['drift_norm']:.4f}")
+                if global_step % 10 == 0:
+                        writer.add_scalar('Loss/train', loss.item(), global_step)
 
-        # Checkpointing and Visualization
-        if rank == 0 and (epoch + 1) % config.save_freq == 0:
+            # Checkpointing and Visualization
+            if rank == 0 and (epoch + 1) % config.save_freq == 0:
+                ckpt_path = Path(config.log_dir) / "models" / f"epoch_{epoch + 1}.pt"
+                CheckpointManager.save(ckpt_path, model.module, ema, optimizer, epoch + 1, global_step)
+
+                with torch.no_grad():
+                    ema.shadow.eval()
+                    res_path = Path(config.log_dir) / "results" / f"epoch_{epoch + 1}.png"
+
+                    if is_toy:
+                        # Visualization for 2D Toy data: Scatter Plot
+                        test_eps = torch.randn(5000, config.latent_dim, device=device)
+                        test_labels = torch.zeros(5000, dtype=torch.long, device=device)
+                        samples = ema.shadow(test_eps, test_labels, torch.ones(5000, device=device))
+                        samples = samples.cpu().numpy()
+
+                        real_batch, _ = next(iter(loader))
+                        real_samples = real_batch.cpu().numpy()
+
+                        plt.figure(figsize=(6, 6))
+
+                        plt.scatter(real_samples[:, 0], real_samples[:, 1],
+                                    color='red',
+                                    alpha=0.3,
+                                    s=3,
+                                    label='Real Data (GT)')
+
+                        plt.scatter(samples[:, 0], samples[:, 1],
+                                    color='blue',
+                                    alpha=0.5,
+                                    s=2,
+                                    label='Generated')
+
+                        plt.xlim(-3, 3)
+                        plt.ylim(-3, 3)
+                        plt.title(f"Epoch {epoch + 1}")
+                        plt.savefig(res_path)
+                        plt.close()
+                    else:
+                        # Visualization for Image data: Image Grid
+                        test_eps = torch.randn(16, *images.shape[1:], device=device)
+                        test_labels = torch.arange(10, device=device).repeat(2)[:16]
+                        samples = ema.shadow(test_eps, test_labels, torch.ones(16, device=device))
+                        save_grid(samples, res_path, nrow=4)
+
+        if rank == 0: writer.close()
+        cleanup()
+
+    except KeyboardInterrupt:
+        if rank == 0:
             ckpt_path = Path(config.log_dir) / "models" / f"epoch_{epoch + 1}.pt"
             CheckpointManager.save(ckpt_path, model.module, ema, optimizer, epoch + 1, global_step)
+            if writer:
+                writer.close()
 
-            with torch.no_grad():
-                ema.shadow.eval()
-                res_path = Path(config.log_dir) / "results" / f"epoch_{epoch + 1}.png"
-
-                if is_toy:
-                    # Visualization for 2D Toy data: Scatter Plot
-                    test_eps = torch.randn(5000, config.latent_dim, device=device)
-                    test_labels = torch.zeros(5000, dtype=torch.long, device=device)
-                    samples = ema.shadow(test_eps, test_labels, torch.ones(5000, device=device))
-                    samples = samples.cpu().numpy()
-
-                    real_batch, _ = next(iter(loader))
-                    real_samples = real_batch.cpu().numpy()
-
-                    plt.figure(figsize=(6, 6))
-
-                    plt.scatter(real_samples[:, 0], real_samples[:, 1],
-                                color='red',
-                                alpha=0.3,
-                                s=3,
-                                label='Real Data (GT)')
-
-                    plt.scatter(samples[:, 0], samples[:, 1],
-                                color='blue',
-                                alpha=0.5,
-                                s=2,
-                                label='Generated')
-
-                    plt.xlim(-3, 3)
-                    plt.ylim(-3, 3)
-                    plt.title(f"Epoch {epoch + 1}")
-                    plt.savefig(res_path)
-                    plt.close()
-                else:
-                    # Visualization for Image data: Image Grid
-                    test_eps = torch.randn(16, *images.shape[1:], device=device)
-                    test_labels = torch.arange(10, device=device).repeat(2)[:16]
-                    samples = ema.shadow(test_eps, test_labels, torch.ones(16, device=device))
-                    save_grid(samples, res_path, nrow=4)
-
-    if rank == 0: writer.close()
-    cleanup()
+    finally:
+        cleanup()
 
 
 def load_config_and_args():
