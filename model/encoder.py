@@ -201,31 +201,34 @@ class MAEEncoder(nn.Module):
         return x_masked, mask, ids_restore
 
     def forward(self, x):
-        # Masking applied at input
-        # x_masked = x * (1 - mask)
-        x_masked, mask, ids_restore = self.random_masking(x)
+        if self.training and (self.mask_ratio > 0):
+            # Masking applied at input
+            # x_masked = x * (1 - mask)
+            x_masked, mask, ids_restore = self.random_masking(x)
 
-        features = self.encoder(x_masked)
+            features = self.encoder(x_masked)
 
-        pred_patches = self.decoder(features)
-        pred_patches = pred_patches.reshape(x.shape[0], self.num_patches, -1)
-        target_patches = self.patchify(x)
+            pred_patches = self.decoder(features)
+            pred_patches = pred_patches.reshape(x.shape[0], self.num_patches, -1)
+            target_patches = self.patchify(x)
 
-        # MSE loss computed only on masked patches
-        # loss = (pred - target)^2 * mask
-        loss = (pred_patches - target_patches) ** 2
-        loss = loss.mean(dim=-1)
-        loss = (loss * mask).sum() / mask.sum()
+            # MSE loss computed only on masked patches
+            # loss = (pred - target)^2 * mask
+            loss = (pred_patches - target_patches) ** 2
+            loss = loss.mean(dim=-1)
+            loss = (loss * mask).sum() / mask.sum()
 
-        return loss, self.unpatchify(pred_patches), mask
+            return loss, self.unpatchify(pred_patches), mask
+        else:
+            return self.encoder
 
 
-def create_feature_encoder(dataset = "cifar10", feature_dim = 512, multi_scale = True, use_pretrained = True):
+def create_feature_encoder(dataset = "cifar10", feature_dim = 512, multi_scale = True, pretrained_path = None):
     """
     Factory function to initialize specific encoders based on dataset type
     """
-    if dataset.lower() == "mnist":
-        return MultiScaleFeatureEncoder(
+    if dataset.lower() in ["mnist"]:
+        encoder = MultiScaleFeatureEncoder(
             in_channels=1,
             base_width=64,
             blocks_per_stage=2,
@@ -233,21 +236,30 @@ def create_feature_encoder(dataset = "cifar10", feature_dim = 512, multi_scale =
             multi_scale=multi_scale,
         )
     elif dataset.lower() in ["cifar10", "cifar"]:
-        if use_pretrained:
-            return PretrainedResNetEncoder(pretrained=True)
-        else:
-            return MultiScaleFeatureEncoder(
-                in_channels=3,
-                base_width=128,
-                blocks_per_stage=2,
-                feature_dim=feature_dim,
-                multi_scale=multi_scale,
-            )
+        encoder = MultiScaleFeatureEncoder(
+            in_channels=3,
+            base_width=128,
+            blocks_per_stage=2,
+            feature_dim=feature_dim,
+            multi_scale=multi_scale,
+        )
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
 
+    if pretrained_path is not None:
+        print(f"==> Loading MAE pretrained weights from {pretrained_path}")
+        state_dict = torch.load(pretrained_path, map_location='cpu')
 
-def pretrain_mae(feature_encoder, train_loader, num_epochs = 50, lr = 1e-3, device = None):
+        encoder.load_state_dict(state_dict)
+
+        encoder.eval()
+        for param in encoder.parameters():
+            param.requires_grad = False
+
+    return encoder
+
+
+def pretrain_mae(feature_encoder, train_loader, num_epochs = 50, lr = 1e-3, mask_ratio=0.75, device = None):
     """
     Self-supervised training loop using MAE reconstruction objective
     Optimizes using AdamW with cosine annealing schedule
@@ -262,7 +274,7 @@ def pretrain_mae(feature_encoder, train_loader, num_epochs = 50, lr = 1e-3, devi
         in_channels=in_channels,
         img_size=32,
         patch_size=4,
-        mask_ratio=0.75,
+        mask_ratio=mask_ratio,
     ).to(device)
 
     optimizer = torch.optim.AdamW(mae.parameters(), lr=lr, weight_decay=0.05)
