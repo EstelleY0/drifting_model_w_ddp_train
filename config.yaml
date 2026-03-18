@@ -17,6 +17,11 @@ patch_size: 4
 in_context_tokens: 16
 latent_dim: 16
 
+# MAE Pre-training Settings
+mae_epochs: 50
+mae_lr: 0.001
+mask_ratio: 0.75
+
 # Training Settings
 epochs: 20000
 lr: 0.0001
