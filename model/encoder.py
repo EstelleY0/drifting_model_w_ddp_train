@@ -302,5 +302,6 @@ def pretrain_mae(feature_encoder, train_loader, num_epochs = 50, lr = 1e-3, mask
             num_batches += 1
 
         scheduler.step()
+        break
 
     return mae.encoder

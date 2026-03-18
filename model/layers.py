@@ -60,8 +60,8 @@ class RoPE(nn.Module):
         freqs = torch.einsum("i,j->ij", t, self.inv_freq.to(dtype))
         emb = torch.cat([freqs, freqs], dim=-1)
 
-        cos = emb.cos()[None, None, :, :]
-        sin = emb.sin()[None, None, :, :]
+        cos = emb.cos()[None, :, None, :]
+        sin = emb.sin()[None, :, None, :]
         self._cache = (cos, sin)
         return cos, sin
 

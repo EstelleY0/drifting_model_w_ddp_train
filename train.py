@@ -53,7 +53,7 @@ def main_worker(rank, world_size, config, gpu_ids):
 
     # Feature extractor setup
     # Uses pixel space (flatten) for toy data by passing None or specific flag
-    phi = None if is_toy else create_feature_encoder(dataset=config.dataset).to(device)
+    phi = None if is_toy else create_feature_encoder(dataset=config.dataset, pretrained_path=config.pretrained_phi).to(device)
     if phi is not None:
         phi.eval()
 
@@ -100,7 +100,8 @@ def main_worker(rank, world_size, config, gpu_ids):
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = curr_lr
 
-            eps = torch.randn(images.size(0), config.latent_dim, device=device)
+            B, C, H, W = images.shape
+            eps = torch.randn(B, C, H, W, device=device)
             alpha = torch.ones(images.size(0), device=device)
             x_gen = model(eps, labels, alpha)
 
@@ -176,12 +177,34 @@ def load_config_and_args():
         config = yaml.safe_load(f)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--exp_name", type=str)
-    parser.add_argument("--dataset", type=str)
-    parser.add_argument("--log_dir", type=str)
-    parser.add_argument("--lr", type=float)
-    parser.add_argument("--gpu_idx", type=str)
-    parser.add_argument("--epochs", type=int)
+    parser.add_argument("--exp_name", type=str, default="drifting_cifar10_v1")
+
+    parser.add_argument("--dataset", type=str, default="cifar10")
+    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--class_balanced", type=bool)
+    parser.add_argument("--n_classes_per_batch", type=int, default=10)
+    parser.add_argument("--n_samples_per_class", type=int, default=64)
+
+    parser.add_argument("--dim", type=int, default=256)
+    parser.add_argument("--depth", type=int, default=6)
+    parser.add_argument("--num_heads", type=int, default=4)
+    parser.add_argument("--patch_size", type=int, default=4)
+    parser.add_argument("--in_context_tokens", type=int, default=16)
+    parser.add_argument("--latent_dim", type=int, default=16)
+
+    parser.add_argument("--mae_epochs", type=int, default=50)
+    parser.add_argument("--mae_lr", type=float, default=0.001)
+    parser.add_argument("--mask_ratio", type=float, default=0.75)
+    parser.add_argument("--pretrained_phi", type=str)
+
+    parser.add_argument("--epochs", type=int, default=20000)
+    parser.add_argument("--lr", type=float, default=0.0001)
+    parser.add_argument("--warmup_steps", type=int, default=5000)
+    parser.add_argument("--ema_decay", type=float, default=0.999)
+    parser.add_argument("--gpu_idx", type=str, default="0")
+
+    parser.add_argument("--save_freq", type=int, default=1)
+    parser.add_argument("--log_dir", type=str, default="./outputs")
 
     args = parser.parse_args()
     for key, value in vars(args).items():
@@ -195,6 +218,7 @@ def main():
     config = load_config_and_args()
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
+    os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
     gpu_ids = [int(i) for i in config.gpu_idx.split(",")]
     world_size = len(gpu_ids)
 
